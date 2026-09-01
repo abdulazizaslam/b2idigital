@@ -250,6 +250,8 @@ def build(source=SOURCE_FEED, self_url=SELF_URL):
         # are legal RFC 822, but mixing them looks like an inconsistency on review.
         "    <lastBuildDate>%s</lastBuildDate>" % format_datetime(newest, usegmt=True),
         "    <docs>https://www.rssboard.org/rss-specification</docs>",
+        # Republished hourly, so tell readers not to poll harder than that.
+        "    <ttl>60</ttl>",
         "    <generator>B2i Digital press-release feed builder</generator>",
     ]
     return "\n".join(head) + "\n" + "\n".join(out) + "\n  </channel>\n</rss>\n"
