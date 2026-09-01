@@ -11,6 +11,11 @@ on:
   schedule:
     - cron: "20 * * * *"      # every hour, at 20 past
   workflow_dispatch:           # lets you trigger it by hand right after publishing
+    inputs:
+      force:
+        description: "Upload even if the feed has not changed (use to test the token)"
+        type: boolean
+        default: false
 
 # Stops two runs from uploading at the same time.
 concurrency:
@@ -35,7 +40,7 @@ jobs:
         env:
           HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
           HUBSPOT_FILE_ID: "220866599267"
-        run: python publish_feed.py
+        run: python publish_feed.py ${{ inputs.force && '--force' || '' }}
 
       - name: Verify the live feed
         run: |
