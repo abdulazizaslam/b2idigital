@@ -1,1 +1,57 @@
-name: placeholder
+name: Publish press-release RSS feed
+
+# Rebuilds the clean press-release feed from HubSpot and replaces the hosted
+# file in place. The public URL never changes:
+#   https://b2idigital.com/hubfs/press-release-feed.xml
+#
+# Runs hourly. When a new press release is published to the press-release blog,
+# it appears in the feed within the hour with no manual step.
+
+on:
+  schedule:
+    - cron: "20 * * * *"      # every hour, at 20 past
+  workflow_dispatch:           # lets you trigger it by hand right after publishing
+
+# Stops two runs from uploading at the same time.
+concurrency:
+  group: press-release-feed
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install --quiet pillow
+
+      - name: Build and publish feed
+        env:
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+          HUBSPOT_FILE_ID: "220866599267"
+        run: python publish_feed.py
+
+      - name: Verify the live feed
+        run: |
+          set -e
+          sleep 20
+          curl -sS -H 'Cache-Control: no-cache' \
+            "https://b2idigital.com/hubfs/press-release-feed.xml?cb=${GITHUB_RUN_ID}" \
+            -o live.xml
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          x = open("live.xml", encoding="utf-8").read()
+          ET.fromstring(x)                                   # must parse
+          assert "<![CDATA[<![CDATA[" not in x, "double CDATA regression"
+          assert "__ptq.gif" not in x, "tracking pixel regression"
+          assert "b2idigital.com/news" not in x, "news content leaked in"
+          n = x.count("<item>")
+          assert n > 0, "feed has no items"
+          print("live feed OK: %d item(s), %d bytes" % (n, len(x.encode())))
+          PY
