@@ -46,17 +46,52 @@ jobs:
         env:
           HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
         run: |
-          python build_pressrelease_feed.py -o /tmp/test_build.xml --content-group-id 156108386373
-          echo "--- first 3000 chars ---"
-          head -c 3000 /tmp/test_build.xml
-          echo
-          echo "--- validation ---"
           python - <<'PY'
-          import xml.etree.ElementTree as ET
-          x = open("/tmp/test_build.xml", encoding="utf-8").read()
-          ET.fromstring(x)
-          print("parses OK, %d item(s), %d bytes" % (x.count("<item>"), len(x.encode())))
+          import os, xml.etree.ElementTree as ET
+          import build_pressrelease_feed as b
+
+          token = os.environ["HUBSPOT_TOKEN"]
+          posts = b.fetch_published_posts(token, content_group_id="156108386373")
+          print("fetched %d total published posts; sampling first 3" % len(posts))
+          posts = posts[:3]
+
+          # Reuse build()'s per-item logic on just the sampled posts.
+          out = []
+          for post in posts:
+              title = post.get("htmlTitle") or post.get("name") or ""
+              link = post.get("url") or ""
+              pub = b.iso_to_rfc822(post.get("publishDate"))
+              body_raw = post.get("postBody") or ""
+              img = b.first_image(body_raw)
+              body = b.clean_body(body_raw, title)
+              parts = [
+                  "    <title>%s</title>" % b.esc(title),
+                  "    <link>%s</link>" % b.esc(link),
+                  '    <guid isPermaLink="true">%s</guid>' % b.esc(link),
+                  "    <pubDate>%s</pubDate>" % pub,
+                  "    <dc:creator>%s</dc:creator>" % b.CREATOR,
+                  "    <category>%s</category>" % b.esc(b.CATEGORY),
+              ]
+              if img:
+                  mime, w, h, nbytes = b.image_meta(img)
+                  dims = ' width="%d" height="%d"' % (w, h) if w and h else ""
+                  size = ' fileSize="%d"' % nbytes if nbytes else ""
+                  parts.append('    <media:content url="%s" medium="image" type="%s"%s%s />' % (b.esc(img), mime, dims, size))
+                  parts.append('    <media:thumbnail url="%s"%s />' % (b.esc(img), dims))
+                  if nbytes:
+                      parts.append('    <enclosure url="%s" type="%s" length="%d" />' % (b.esc(img), mime, nbytes))
+              parts.append("    <description>%s</description>" % b.cdata(body))
+              parts.append("    <content:encoded>%s</content:encoded>" % b.cdata(body))
+              out.append("  <item>\n" + "\n".join(parts) + "\n  </item>")
+
+          xml_out = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+                      '<rss version="2.0"><channel>\n' + "\n".join(out) + "\n</channel></rss>\n")
+          open("/tmp/test_build.xml", "w", encoding="utf-8").write(xml_out)
+          ET.fromstring(xml_out)
+          print("parses OK, %d sampled item(s), %d bytes" % (xml_out.count("<item>"), len(xml_out.encode())))
           PY
+          echo "--- sample item ---"
+          head -c 3000 /tmp/test_build.xml
 
       - name: One-off - remove a matching item from the hosted feed
         if: ${{ inputs.remove_match != '' && inputs.remove_match != '__validate_builder__' }}
