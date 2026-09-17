@@ -41,35 +41,6 @@ jobs:
       - name: Install dependencies
         run: pip install --quiet pillow
 
-      - name: Probe atom.xml reachability from GitHub Actions
-        run: |
-          for i in 1 2 3 4 5; do
-            code=$(curl -sS -o /tmp/atom_probe_$i.xml -w '%{http_code}' "https://b2idigital.com/press-release/atom.xml")
-            echo "attempt $i: HTTP $code"
-            sleep 3
-          done
-          echo "--- last response, first 300 bytes ---"
-          head -c 300 /tmp/atom_probe_5.xml
-          echo
-          echo "--- content-type of last response ---"
-          curl -sS -D - -o /dev/null "https://b2idigital.com/press-release/atom.xml" | grep -iE "^HTTP|content-type|x-hs-cfworker"
-
-      - name: Check blog-posts read scope on HUBSPOT_TOKEN
-        env:
-          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
-        run: |
-          code=$(curl -sS -o /tmp/scope_check.json -w '%{http_code}' \
-            -H "Authorization: Bearer ${HUBSPOT_TOKEN}" \
-            "https://api.hubapi.com/cms/v3/blogs/posts?limit=1")
-          echo "HTTP $code"
-          cat /tmp/scope_check.json
-          echo
-          if [ "$code" = "200" ]; then
-            echo "SCOPE OK: token can read blog posts"
-          else
-            echo "SCOPE MISSING or other error: token cannot read blog posts (see body above)"
-          fi
-
       - name: One-off - remove a matching item from the hosted feed
         if: ${{ inputs.remove_match != '' }}
         env:
