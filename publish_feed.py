@@ -101,8 +101,6 @@ def main():
         f.write(xml)
     print("built %s: %d bytes, %d item(s)" % (a.output, len(xml.encode()), items))
 
-    print("no published press releases - publishing an empty feed")
-
     if a.dry_run:
         print("dry run - not uploading")
         return
