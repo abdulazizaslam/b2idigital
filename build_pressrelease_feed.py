@@ -2,8 +2,8 @@
 """
 Build a clean, full-text RSS 2.0 feed for the B2i Digital Press Release blog.
 
-Reads HubSpot's native feed at https://b2idigital.com/press-release/rss.xml and
-rewrites it into a distributor-ready feed:
+Reads published posts directly from HubSpot's CMS Blog Posts API (live data,
+not a cached feed file) and rewrites them into a distributor-ready feed:
 
   - full release text in BOTH <description> and <content:encoded> (CDATA)
   - HubSpot __ptq.gif tracking pixel removed
@@ -14,19 +14,30 @@ rewrites it into a distributor-ready feed:
   - <guid isPermaLink="true">, <atom:link rel="self">, <lastBuildDate>
   - <dc:creator>B2i Digital</dc:creator> instead of a personal-domain author
 
+The output file's structure is unchanged from the previous rss.xml-based
+builder -- same channel tags, same <item> fields, same cleanup pipeline.
+Only the data source changed, from a HubSpot-cached rss.xml (which lagged
+behind publish/unpublish changes) to the live Blog Posts API.
+
+Requires HUBSPOT_TOKEN with the "content" (blog posts read) scope.
+
 Usage:  python build_pressrelease_feed.py [-o OUTPUT.xml]
 """
 
 import argparse
 import html
 import io
+import json
+import os
 import re
 import sys
+import urllib.parse
 import urllib.request
 from email.utils import format_datetime, parsedate_to_datetime
 from datetime import datetime, timezone
 
-SOURCE_FEED = "https://b2idigital.com/press-release/rss.xml"
+API_BASE = "https://api.hubapi.com/cms/v3/blogs/posts"
+CONTENT_GROUP_ID = "220765531831"     # the "Press Release" blog
 SELF_URL = "https://b2idigital.com/hubfs/press-release-feed.xml"
 
 CHANNEL_TITLE = "B2i Digital Press Releases"
@@ -34,14 +45,39 @@ CHANNEL_LINK = "https://b2idigital.com/press-release"
 CHANNEL_DESC = ("Full-text press releases distributed by B2i Digital, Inc. "
                 "on behalf of its client companies.")
 CREATOR = "B2i Digital"
+CATEGORY = "Press Release"
 UA = {"User-Agent": "b2i-feed-builder/1.0"}
 
 
-def fetch(url, binary=False):
-    req = urllib.request.Request(url, headers=UA)
+def fetch(url, binary=False, headers=None):
+    req = urllib.request.Request(url, headers={**UA, **(headers or {})})
     with urllib.request.urlopen(req, timeout=60) as r:
         data = r.read()
     return data if binary else data.decode("utf-8", "replace")
+
+
+def fetch_published_posts(token, content_group_id=CONTENT_GROUP_ID):
+    """Return published posts in a blog, newest first, straight from HubSpot's
+    live CMS API -- no cached/pre-rendered feed file in between."""
+    params = {
+        "contentGroupId": content_group_id,
+        "state": "PUBLISHED",
+        "sort": "-publishDate",
+        "limit": "100",
+    }
+    posts, after = [], None
+    while True:
+        q = dict(params)
+        if after:
+            q["after"] = after
+        url = "%s?%s" % (API_BASE, urllib.parse.urlencode(q))
+        raw = fetch(url, headers={"Authorization": "Bearer %s" % token})
+        data = json.loads(raw)
+        posts.extend(data.get("results", []))
+        after = data.get("paging", {}).get("next", {}).get("after")
+        if not after:
+            break
+    return posts
 
 
 def strip_tag_block(markup, tag, class_name):
@@ -149,58 +185,34 @@ CDATA_OPEN = "<![CDATA["
 CDATA_CLOSE = "]]>"
 
 
-def unwrap_field(raw):
-    """Return the raw HTML of an RSS text field, however it was encoded.
-
-    HubSpot emits the body wrapped in CDATA -- and currently emits it wrapped
-    TWICE ("<![CDATA[<![CDATA[<p>..."). Re-wrapping that without unwrapping
-    first leaks a literal "<![CDATA[" into the rendered text, which the W3C
-    feed validator flags as invalid HTML. Strip every wrapper, then let cdata()
-    add exactly one back.
-
-    Content inside CDATA is already raw, so it must NOT be HTML-unescaped --
-    doing so would turn a literal "&amp;" in the markup into a bare "&".
-    """
-    s = raw.strip()
-    if CDATA_OPEN not in s:
-        return html.unescape(s)
-    # HubSpot wraps an already-wrapped body, escaping the inner terminator as
-    # "]]&gt;". Peel one layer at a time, restoring that terminator each pass so
-    # the next layer can be recognised.
-    while s.startswith(CDATA_OPEN):
-        if s.endswith(CDATA_CLOSE):
-            s = s[len(CDATA_OPEN):-len(CDATA_CLOSE)].strip()
-        else:
-            s = s[len(CDATA_OPEN):].strip()
-        s = s.replace("]]&gt;", CDATA_CLOSE).strip()
-    # Any markers still embedded are HubSpot artifacts, never real content.
-    return s.replace(CDATA_OPEN, "").replace(CDATA_CLOSE, "").strip()
-
-
 def cdata(s):
     return CDATA_OPEN + s.replace(CDATA_CLOSE, "]]&gt;") + CDATA_CLOSE
 
 
-def build(source=SOURCE_FEED, self_url=SELF_URL):
-    src = fetch(source)
-    items_raw = re.findall(r"<item>(.*?)</item>", src, re.S)
-    if "press-release feed builder" in src:
-        sys.exit("source feed is this script own output: %s" % source)
+def iso_to_rfc822(iso):
+    """HubSpot API dates are ISO 8601 ('2026-09-01T14:00:36Z'); item pubDates
+    are RFC 822 ('Tue, 01 Sep 2026 14:00:36 GMT'), same as before."""
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return format_datetime(dt.astimezone(timezone.utc), usegmt=True)
+
+
+def build(token=None, self_url=SELF_URL, content_group_id=CONTENT_GROUP_ID):
+    token = token or os.environ.get("HUBSPOT_TOKEN")
+    if not token:
+        sys.exit("HUBSPOT_TOKEN is not set")
+
+    posts = fetch_published_posts(token, content_group_id)
+    if not posts:
+        sys.exit("No published posts found in blog %s" % content_group_id)
 
     out = []
-    for raw in items_raw:
-        def tag(name, default=""):
-            m = re.search(r"<%s>(.*?)</%s>" % (name, name), raw, re.S)
-            return m.group(1).strip() if m else default
+    for post in posts:
+        title = post.get("htmlTitle") or post.get("name") or ""
+        link = post.get("url") or ""
+        guid = link
+        pub = iso_to_rfc822(post.get("publishDate"))
 
-        title = unwrap_field(tag("title"))
-        link = unwrap_field(tag("link"))
-        guid = unwrap_field(tag("guid")) or link
-        pub = tag("pubDate")
-        category = unwrap_field(tag("category"))
-
-        m = re.search(r"<content:encoded>(.*?)</content:encoded>", raw, re.S)
-        body_raw = unwrap_field(m.group(1)) if m else ""
+        body_raw = post.get("postBody") or ""
         img = first_image(body_raw)
         body = clean_body(body_raw, title)
 
@@ -210,9 +222,8 @@ def build(source=SOURCE_FEED, self_url=SELF_URL):
             '    <guid isPermaLink="true">%s</guid>' % esc(guid),
             "    <pubDate>%s</pubDate>" % pub,
             "    <dc:creator>%s</dc:creator>" % CREATOR,
+            "    <category>%s</category>" % esc(CATEGORY),
         ]
-        if category:
-            parts.append("    <category>%s</category>" % esc(category))
         if img:
             mime, w, h, nbytes = image_meta(img)
             dims = ' width="%d" height="%d"' % (w, h) if w and h else ""
@@ -228,8 +239,7 @@ def build(source=SOURCE_FEED, self_url=SELF_URL):
         out.append("  <item>\n" + "\n".join(parts) + "\n  </item>")
 
     try:
-        newest = parsedate_to_datetime(
-            re.search(r"<pubDate>(.*?)</pubDate>", items_raw[0]).group(1))
+        newest = parsedate_to_datetime(iso_to_rfc822(posts[0].get("publishDate")))
     except Exception:
         newest = datetime.now(timezone.utc)
 
@@ -260,10 +270,10 @@ def build(source=SOURCE_FEED, self_url=SELF_URL):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--output", default="pressreleasefeed.xml")
-    ap.add_argument("--source", default=SOURCE_FEED)
     ap.add_argument("--self-url", default=SELF_URL)
+    ap.add_argument("--content-group-id", default=CONTENT_GROUP_ID)
     a = ap.parse_args()
-    xml = build(a.source, a.self_url)
+    xml = build(self_url=a.self_url, content_group_id=a.content_group_id)
     with open(a.output, "w", encoding="utf-8", newline="\n") as f:
         f.write(xml)
     print("wrote %s (%d bytes, %d items)" % (a.output, len(xml.encode()), xml.count("<item>")))
