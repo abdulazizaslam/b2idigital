@@ -37,6 +37,22 @@ jobs:
       - name: Install dependencies
         run: pip install --quiet pillow
 
+      - name: Check blog-posts read scope on HUBSPOT_TOKEN
+        env:
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+        run: |
+          code=$(curl -sS -o /tmp/scope_check.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${HUBSPOT_TOKEN}" \
+            "https://api.hubapi.com/cms/v3/blogs/posts?limit=1")
+          echo "HTTP $code"
+          cat /tmp/scope_check.json
+          echo
+          if [ "$code" = "200" ]; then
+            echo "SCOPE OK: token can read blog posts"
+          else
+            echo "SCOPE MISSING or other error: token cannot read blog posts (see body above)"
+          fi
+
       - name: Build and publish feed
         env:
           HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
