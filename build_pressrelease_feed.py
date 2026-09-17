@@ -184,8 +184,8 @@ def cdata(s):
 def build(source=SOURCE_FEED, self_url=SELF_URL):
     src = fetch(source)
     items_raw = re.findall(r"<item>(.*?)</item>", src, re.S)
-    if not items_raw:
-        sys.exit("No <item> elements found in %s" % source)
+    if "press-release feed builder" in src:
+        sys.exit("source feed is this script own output: %s" % source)
 
     out = []
     for raw in items_raw:
