@@ -41,8 +41,25 @@ jobs:
       - name: Install dependencies
         run: pip install --quiet pillow
 
+      - name: Validate new API-based builder against a blog with real posts
+        if: ${{ inputs.remove_match == '__validate_builder__' }}
+        env:
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+        run: |
+          python build_pressrelease_feed.py -o /tmp/test_build.xml --content-group-id 156108386373
+          echo "--- first 3000 chars ---"
+          head -c 3000 /tmp/test_build.xml
+          echo
+          echo "--- validation ---"
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          x = open("/tmp/test_build.xml", encoding="utf-8").read()
+          ET.fromstring(x)
+          print("parses OK, %d item(s), %d bytes" % (x.count("<item>"), len(x.encode())))
+          PY
+
       - name: One-off - remove a matching item from the hosted feed
-        if: ${{ inputs.remove_match != '' }}
+        if: ${{ inputs.remove_match != '' && inputs.remove_match != '__validate_builder__' }}
         env:
           HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
           HUBSPOT_FILE_ID: "220866599267"
