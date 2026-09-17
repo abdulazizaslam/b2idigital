@@ -17,6 +17,10 @@ on:
         description: "Upload even if the feed has not changed (use to test the token)"
         type: boolean
         default: false
+      remove_match:
+        description: "One-off: remove any hosted <item> whose XML contains this substring (e.g. a post slug), instead of the normal rebuild. Leave blank for the normal run."
+        type: string
+        default: ""
 
 # Stops two runs from uploading at the same time.
 concurrency:
@@ -53,7 +57,15 @@ jobs:
             echo "SCOPE MISSING or other error: token cannot read blog posts (see body above)"
           fi
 
+      - name: One-off - remove a matching item from the hosted feed
+        if: ${{ inputs.remove_match != '' }}
+        env:
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+          HUBSPOT_FILE_ID: "220866599267"
+        run: python remove_feed_item.py --match "${{ inputs.remove_match }}"
+
       - name: Build and publish feed
+        if: ${{ inputs.remove_match == '' }}
         env:
           HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
           HUBSPOT_FILE_ID: "220866599267"
@@ -74,6 +86,8 @@ jobs:
           assert "__ptq.gif" not in x, "tracking pixel regression"
           assert "b2idigital.com/news" not in x, "news content leaked in"
           n = x.count("<item>")
-          assert n > 0, "feed has no items"
+          removing = "${{ inputs.remove_match }}" != ""
+          if not removing:
+              assert n > 0, "feed has no items"
           print("live feed OK: %d item(s), %d bytes" % (n, len(x.encode())))
           PY
