@@ -85,7 +85,11 @@ jobs:
               out.append("  <item>\n" + "\n".join(parts) + "\n  </item>")
 
           xml_out = ('<?xml version="1.0" encoding="UTF-8"?>\n'
-                      '<rss version="2.0"><channel>\n' + "\n".join(out) + "\n</channel></rss>\n")
+                      '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" '
+                      'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+                      'xmlns:atom="http://www.w3.org/2005/Atom" '
+                      'xmlns:media="http://search.yahoo.com/mrss/"><channel>\n'
+                      + "\n".join(out) + "\n</channel></rss>\n")
           open("/tmp/test_build.xml", "w", encoding="utf-8").write(xml_out)
           ET.fromstring(xml_out)
           print("parses OK, %d sampled item(s), %d bytes" % (xml_out.count("<item>"), len(xml_out.encode())))
