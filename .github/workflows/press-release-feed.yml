@@ -4,13 +4,13 @@ name: Publish press-release RSS feed
 # file in place. The public URL never changes:
 #   https://b2idigital.com/hubfs/press-release-feed.xml
 #
-# Runs every 30 minutes. When a new press release is published to the
-# press-release blog, it appears in the feed within 30 minutes with no
-# manual step.
+# Runs every hour. When a new press release is published to the
+# press-release blog, it appears in the feed within the hour with no
+# manual step. If nothing changed since the last run, no upload happens.
 
 on:
   schedule:
-    - cron: "5,35 * * * *"    # every 30 minutes, at :05 and :35
+    - cron: "20 * * * *"      # every hour, at 20 past
   workflow_dispatch:           # lets you trigger it by hand right after publishing
     inputs:
       force:
