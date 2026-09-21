@@ -196,14 +196,50 @@ def iso_to_rfc822(iso):
     return format_datetime(dt.astimezone(timezone.utc), usegmt=True)
 
 
+RETRACTION_TAGS = (
+    '    <category domain="http://newsrpm.com/version">2</category>\n'
+    '    <category domain="http://newsrpm.com/visibility">retracted</category>'
+)
+RETRACTED_MARKER = 'domain="http://newsrpm.com/visibility"'
+
+
+def retracted_items(self_url, published_guids):
+    """Diff the currently-live hosted feed against the newly-published guid
+    set to drive FinancialContent/NewsRPM's required retraction protocol:
+
+      - an item that was live last run but is no longer published gets
+        republished ONE more time with the two NewsRPM retraction
+        <category> tags added, so their crawler can pick up the retraction
+        on its next poll;
+      - an item that was already republished with those tags is dropped
+        for good (NewsRPM has already seen the retraction).
+
+    No separate state file is needed -- the previous run's own output,
+    fetched fresh each time, IS the state.
+    """
+    try:
+        prev = fetch(self_url, headers={"Cache-Control": "no-cache"})
+    except Exception:
+        return []
+
+    out = []
+    for item in re.findall(r"  <item>.*?</item>", prev, re.S):
+        m = re.search(r"<guid[^>]*>(.*?)</guid>", item, re.S)
+        guid = html.unescape(m.group(1).strip()) if m else None
+        if guid in published_guids:
+            continue                                 # still live -- rebuilt normally above
+        if RETRACTED_MARKER in item:
+            continue                                 # already served the retraction once -- drop
+        out.append(item.replace("</item>", RETRACTION_TAGS + "\n  </item>"))
+    return out
+
+
 def build(token=None, self_url=SELF_URL, content_group_id=CONTENT_GROUP_ID):
     token = token or os.environ.get("HUBSPOT_TOKEN")
     if not token:
         sys.exit("HUBSPOT_TOKEN is not set")
 
     posts = fetch_published_posts(token, content_group_id)
-    if not posts:
-        sys.exit("No published posts found in blog %s" % content_group_id)
 
     out = []
     for post in posts:
@@ -237,6 +273,12 @@ def build(token=None, self_url=SELF_URL, content_group_id=CONTENT_GROUP_ID):
         parts.append("    <description>%s</description>" % cdata(body))
         parts.append("    <content:encoded>%s</content:encoded>" % cdata(body))
         out.append("  <item>\n" + "\n".join(parts) + "\n  </item>")
+
+    published_guids = {post.get("url") for post in posts}
+    out.extend(retracted_items(self_url, published_guids))
+
+    if not out:
+        sys.exit("No published posts and nothing to retract in blog %s" % content_group_id)
 
     try:
         newest = parsedate_to_datetime(iso_to_rfc822(posts[0].get("publishDate")))
